@@ -2,16 +2,23 @@ import time, os, csv, io, hashlib, json
 from fastapi import HTTPException
 from src.models import Job, Report, Delivery
 from src.config.settings import ARTIFACT_DIR
+from src.services.audit import record
+from src.services.execution import current_result
 def create(db, data):
     j=db.get(Job,data.job_id)
     if not j or j.status!='completed' or not j.approved:
         raise HTTPException(409,'请先选择已完成且获批准的分析结果')
+    if not current_result(j):
+        raise HTTPException(409,'结果不完整或未通过完整性校验，不能用于分发')
     r=Report(name=data.name, job_id=j.id, destination=data.destination, interval_seconds=data.interval_seconds, next_run=time.time()+data.delay_seconds, enabled=True)
     db.add(r); db.flush()
     return r
 def deliver(db, report):
     j=db.get(Job,report.job_id)
     if not j or not j.approved: return
+    if not current_result(j):
+        record(db,'worker','report.skipped',{'id':report.id,'job':j.id,'reason':'结果缺失或未通过完整性校验，本次分发已跳过'})
+        return
     out=io.StringIO()
     out.write('\ufeff')
     table=j.result.get('table',{})

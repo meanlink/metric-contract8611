@@ -8,3 +8,9 @@ class JobStatus(str, Enum):
     running = 'running'
     completed = 'completed'
     failed = 'failed'
+class AttemptOutcome(str, Enum):
+    running = 'running'
+    completed = 'completed'
+    failed = 'failed'
+    recovered = 'recovered'
+    superseded = 'superseded'

@@ -33,7 +33,7 @@ Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed
 
 ## 环境变量与 Docker
 COMPOSE_PROJECT_NAME=metric-contract；FRONTEND_PORT=18217；BACKEND_PORT=19217；DB_PORT=17717；DB_PASSWORD、JWT_SECRET 见 .env.example；SEED_DEMO 默认 true。共享命名产物卷供后端下载与 worker 写入，数据库/Redis 各持久卷。
-恰好五服务均有健康检查。Redis 队列加 SQL 排队状态兜底；worker 按 next_run 生成本地收件箱文件。周期 60 秒至 30 天。分发结果为批准分析的固定快照；若需新数据重新计算并建立新计划。当前不连接邮件或企业聊天。
+恰好五服务均有健康检查。Redis 队列加 SQL 排队状态兜底；worker 按 next_run 生成本地收件箱文件。支持多路 worker 并行执行：任务按租约认领（claim_token+心跳续租），只有持有效租约的执行端能发布结果；执行端中断后租约过期自动恢复重新排队续算，迟到返回的旧执行端结果与失败回写一律丢弃不覆盖；每次认领、恢复与废弃原因记录在任务尝试历史中，结果页可查。批准与分发前服务端校验结果完整性与指纹，始终采用同一份有效结果。周期 60 秒至 30 天。分发结果为批准分析的固定快照；若需新数据重新计算并建立新计划。当前不连接邮件或企业聊天。
 错误响应、请求编号、Redis 每 IP 每分钟 240 次限流、JWT 和数据库操作审计。演示密钥与密码仅供本机模拟；生产部署前配置独立密钥与账号。
 
 ## 数据与验收

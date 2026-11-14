@@ -3,8 +3,12 @@ def checksum(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, allow_nan=False).encode()).hexdigest()
 def dataset_dict(d):
     return {'id':d.id, 'name':d.name, 'source':d.source, 'rows':len(d.records), 'checksum':d.checksum, 'created_at':d.created_at}
+def attempt_dict(a):
+    return {k:getattr(a,k) for k in ['id','executor','claimed_at','heartbeat_at','finished_at','outcome','reason']}
 def job_dict(j):
-    return {k:getattr(j,k) for k in ['id','name','dataset_id','params','status','result','error','approved','created_at','finished_at']}
+    d={k:getattr(j,k) for k in ['id','name','dataset_id','params','status','result','error','approved','created_at','finished_at','result_checksum']}
+    d['attempts']=[attempt_dict(a) for a in j.attempts]
+    return d
 def report_dict(r):
     return {k:getattr(r,k) for k in ['id','name','job_id','destination','interval_seconds','next_run','enabled']}
 def delivery_dict(d):

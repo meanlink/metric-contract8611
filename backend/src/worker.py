@@ -1,4 +1,4 @@
-import time, json, logging
+import os, socket, threading, time, logging
 from pathlib import Path
 from sqlalchemy import select
 from redis import Redis
@@ -8,24 +8,40 @@ from src.models import Job, Dataset, Report
 from src.services.business import analyze
 from src.services.reports import deliver
 from src.services.audit import record
+from src.services import execution
+from src.services.jobs import enqueue
 logging.basicConfig(level=logging.INFO)
+EXECUTOR_ID=f'{socket.gethostname()}:{os.getpid()}'
 def execute(job_id):
     with Session() as db:
+        claimed=execution.claim(db,job_id,EXECUTOR_ID)
+        if not claimed:return # 他方已持有有效租约，本端不再重复执行
+        token,attempt_id=claimed
         j=db.get(Job,job_id)
-        if not j or j.status!='queued':return
-        j.status='running'; db.commit()
-        try:
-            d=db.get(Dataset,j.dataset_id)
-            result=analyze(d.records,j.params)
-            json.dumps(result,allow_nan=False)
-            j.result=result;j.status='completed';j.finished_at=time.time()
-            record(db,'worker','job.completed',{'id':j.id})
-        except Exception as e:
-            logging.exception('Analysis failed')
-            j.status='failed';j.error=str(e)[:990];j.finished_at=time.time()
-            record(db,'worker','job.failed',{'id':j.id,'error':j.error})
-        db.commit()
+        dataset_id,params=j.dataset_id,dict(j.params or {})
+    stop=threading.Event()
+    def beat():
+        while not stop.wait(execution.HEARTBEAT_INTERVAL):
+            try:
+                if not execution.heartbeat(job_id,token,attempt_id):return # 租约已丢失，发布将被拒绝
+            except Exception:logging.exception('Heartbeat failed')
+    pulser=threading.Thread(target=beat,daemon=True);pulser.start()
+    try:
+        with Session() as db:
+            d=db.get(Dataset,dataset_id)
+            records=list(d.records) if d else None
+        result=analyze(records,params)
+        execution.publish(job_id,token,attempt_id,result=result)
+    except Exception as e:
+        logging.exception('Analysis failed')
+        execution.publish(job_id,token,attempt_id,error=e)
+    finally:
+        stop.set();pulser.join(timeout=2)
 def tick():
+    with Session() as db:
+        recovered=execution.recover_expired(db)
+        db.commit()
+    for job_id in recovered:enqueue(job_id)
     with Session() as db:
         queued=list(db.scalars(select(Job.id).where(Job.status=='queued').limit(3)))
     for job_id in queued:execute(job_id)
@@ -36,11 +52,11 @@ def tick():
         db.commit()
 def main():
     r=Redis.from_url(REDIS_URL,socket_timeout=3)
-    # This Compose stack has a single worker. A crash must not strand its jobs.
+    # 多路执行：启动只恢复租约过期或历史遗留的任务；健康执行端心跳未断的任务不受影响
     with Session() as db:
-        for j in db.scalars(select(Job).where(Job.status=='running')):
-            j.status='queued';record(db,'worker','job.recovered',{'id':j.id})
+        recovered=execution.recover_expired(db)
         db.commit()
+    for job_id in recovered:enqueue(job_id)
     while True:
         Path('/tmp/heartbeat').touch()
         try:
